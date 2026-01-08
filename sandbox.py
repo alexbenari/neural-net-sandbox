@@ -1,4 +1,5 @@
 import argparse
+import collections
 import os
 import random
 import time
@@ -21,14 +22,14 @@ from nets import (
 )
 from number_words import number_to_words
 
-'''def make_criterion():
+def make_criterion():
     return lambda output, target: torch.clamp(
         torch.abs(output - target) - 0.5,
         min=0.0,
-    ).mean()'''
+    ).mean()
 
-def make_criterion():
-    return torch.nn.SmoothL1Loss(beta=1.0)
+'''def make_criterion():
+    return torch.nn.SmoothL1Loss(beta=1.0)'''
 
 
 def maybe_preload_dataset(dataset, device, preload):
@@ -43,6 +44,27 @@ def maybe_preload_dataset(dataset, device, preload):
     label_tensor = torch.stack(label_list).to(device)
     return TensorDataset(data_tensor, label_tensor)
 
+def _ints_from_inputs(data, input_type):
+    if input_type == "digit":
+        values = []
+        for row in data:
+            digits = "".join(str(int(value.item())) for value in row)
+            values.append(int(digits))
+        return values
+    if input_type == "digit1h":
+        values = []
+        for row in data:
+            digits = row.view(-1, 10).argmax(dim=1).tolist()
+            values.append(int("".join(str(d) for d in digits)))
+        return values
+    if input_type == "binary":
+        values = []
+        for row in data:
+            bits = "".join(str(int(value.item())) for value in row)
+            values.append(int(bits, 2))
+        return values
+    return [int(round(value.item())) for value in data.view(-1)]
+
 
 def train(
     model,
@@ -54,6 +76,8 @@ def train(
     device="cpu",
     preload=True,
     log_per_epoch=True,
+    input_type="int",
+    verbose_samples=False,
 ):
     model = model.to(device)
     print(model)
@@ -73,11 +97,24 @@ def train(
     data_loader = DataLoader(training_set, batch_size=batch_size, shuffle=True)
     dataset_size = len(training_set)
     print(f"Dataset size: {dataset_size}, batch size: {batch_size}, epochs: {epochs}")
+    with torch.no_grad():
+        full_data = [batch[0] for batch in DataLoader(training_set, batch_size=batch_size)]
+        full_labels = [batch[1] for batch in DataLoader(training_set, batch_size=batch_size)]
+        data_tensor = torch.cat(full_data, dim=0)
+        label_tensor = torch.cat(full_labels, dim=0)
+        output_tensor = model(data_tensor.to(device)).cpu()
+        output_mean = output_tensor.mean().item()
+        output_std = output_tensor.std(unbiased=False).item()
+        label_mean = label_tensor.mean().item()
+        label_std = label_tensor.std(unbiased=False).item()
+        print(f"Initial output mean/std: {output_mean:.4f}/{output_std:.4f}")
+        print(f"Label mean/std: {label_mean:.4f}/{label_std:.4f}")
     for epoch in range(epochs):
         epoch_start = time.perf_counter()
         running_loss = torch.tensor(0.0, device=device)
         correct = torch.tensor(0.0, device=device)
         seen = 0
+        last_samples = collections.deque(maxlen=20)
         for data, labels in data_loader:
             if not preload:
                 data = data.to(device)
@@ -92,6 +129,17 @@ def train(
             running_loss += loss.detach() * batch_size_actual
             correct += (torch.round(outputs) == labels).sum()
             seen += batch_size_actual
+            if verbose_samples:
+                inputs = _ints_from_inputs(data.detach().cpu(), input_type)
+                targets = labels.detach().cpu().view(-1).tolist()
+                preds = outputs.detach().cpu().view(-1).tolist()
+                for input_value, target, pred in zip(inputs, targets, preds):
+                    rounded = round(pred)
+                    abs_err = abs(pred - target)
+                    last_samples.append(
+                        f"sample input={input_value} target={int(target)} "
+                        f"pred={pred:.4f} rounded={rounded} abs_err={abs_err:.4f}"
+                    )
         avg_loss = (running_loss / max(seen, 1)).item()
         accuracy = (correct / max(seen, 1)).item()
         elapsed = time.perf_counter() - epoch_start
@@ -100,6 +148,10 @@ def train(
                 f"Epoch [{epoch + 1}/{epochs}] avg loss: {avg_loss:.4f} "
                 f"accuracy: {accuracy:.4f} time: {elapsed:.2f}s"
             )
+        if verbose_samples and last_samples:
+            print(f"Epoch [{epoch + 1}/{epochs}] last 20 samples:")
+            for line in last_samples:
+                print(line)
     return accuracy
 
 
@@ -125,7 +177,6 @@ def evaluate(model, dataset, batch_size=32, device="cpu", preload=True, label="T
     avg_loss = (running_loss / max(seen, 1)).item()
     accuracy = (correct / max(seen, 1)).item()
     print(f"{label} avg loss: {avg_loss:.4f} accuracy: {accuracy:.4f}")
-    model.train()
 
 
 def _digits_tensor_to_int(digits):
@@ -235,6 +286,8 @@ def main():
             device=device,
             preload=args.preload,
             log_per_epoch=not args.overfit,
+            input_type=input_type,
+            verbose_samples=args.verbose,
         )
         if args.overfit:
             print(f"Overfit training accuracy: {accuracy:.4f}")
