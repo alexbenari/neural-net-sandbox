@@ -51,6 +51,15 @@ class TestDatasetGeneration(unittest.TestCase):
                     expected = len(number_to_words(value))
                     self.assertEqual(expected, int(label_str))
 
+    def test_train_values_in_range(self):
+        rng = random.Random(2024)
+        for format_name, parser in self.parsers.items():
+            rows = self._sample_rows(self.rows[format_name]["train"], 100, rng)
+            for value_str, _ in rows:
+                value = parser(value_str)
+                self.assertGreaterEqual(value, 0)
+                self.assertLessEqual(value, 600000000)
+
     def test_train_test_disjoint(self):
         for format_name in self.parsers:
             train_values = self.values[format_name]["train"]

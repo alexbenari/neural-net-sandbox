@@ -8,16 +8,17 @@ Each dataset row has two columns:
 1. The input value in a chosen format.
 2. The target label: the count of letters and spaces in the spelled-out number.
 
-Three formats are generated from the same underlying integer values:
+Four formats are generated from the same underlying integer values:
 - `int`: raw integer as a string.
 - `digits`: zero-padded 9-digit string (MSB to LSB).
+- `digit1h`: uses the `digits` files, but consumed as a 90-length one-hot vector (10 per digit).
 - `binary`: zero-padded 30-bit string (MSB to LSB).
 
 Files are stored under `data/` with a format prefix:
 `int-train.csv`, `int-test.csv`, `int-eval.csv` (and the same for `digits` and `binary`).
 
 ## Data Generation Rules
-- **Train (100K)**: random integers in `0..600000000` with no digit restriction.
+- **Train (100K)**: includes all integers `0..1000`, plus random integers in `0..600000000` with no digit restriction.
 - **Test (10K)**: random integers in `0..600000000` with no digit restriction, excluding any train values.
 - **Eval (10,000 total)**:
   - All integers `0..1000` (these may overlap with train, but not test).

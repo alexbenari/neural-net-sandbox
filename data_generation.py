@@ -40,7 +40,7 @@ class DataSetGenerator:
             writer.writerows(rows)
 
     def _sample_train_values(self):
-        values = set()
+        values = set(range(0, 1001))
         while len(values) < self.train_size:
             value = self.rng.randint(self.min_value, self.split_max)
             values.add(value)
@@ -152,6 +152,21 @@ class DigitsDataset(Dataset):
         digits = torch.tensor([int(ch) for ch in digits_str], dtype=torch.float32)
         target = torch.tensor([float(target_str)], dtype=torch.float32)
         return digits, target
+
+
+class DigitOneHotWrapper(Dataset):
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        digits, target = self.dataset[index]
+        vector = torch.zeros(digits.numel() * 10, dtype=digits.dtype)
+        for idx, value in enumerate(digits):
+            vector[idx * 10 + int(value.item())] = 1.0
+        return vector, target
 
 
 class BinaryDataset(Dataset):
