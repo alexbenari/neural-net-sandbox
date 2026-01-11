@@ -18,11 +18,9 @@ Files are stored under `data/` with a format prefix:
 `int-train.csv`, `int-test.csv`, `int-eval.csv` (and the same for `digits` and `binary`).
 
 ## Data Generation Rules
-- **Train (100K)**: includes all integers `0..1000`, plus random integers in `0..600000000` with no digit restriction.
-- **Test (10K)**: random integers in `0..600000000` with no digit restriction, excluding any train values.
-- **Eval (10,000 total)**:
-  - All integers `0..1000` (these may overlap with train, but not test).
-  - Remaining values are random integers in `0..999000000`, excluding train/test and the `0..1000` block.
+- **Train (100K)**: includes all integers `0..1000`, plus random integers in `0..999999999` 
+- **Test (10K)**: random integers in `0..999999999`, excluding any included in train dataset.
+- **Eval (10,000 total)**: random integers in `0..999999999`, excluding integers in train or test.
 
 ## How to Generate
 - Default output directory: `python sandbox.py --generate-data`

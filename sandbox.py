@@ -22,11 +22,14 @@ from nets import (
 )
 from number_words import number_to_words
 
-def make_criterion():
+'''def make_criterion():
     return lambda output, target: torch.clamp(
         torch.abs(output - target) - 0.5,
         min=0.0,
-    ).mean()
+    ).mean()'''
+
+def make_criterion():
+    return lambda output, target: (torch.abs(output - target)).mean()
 
 '''def make_criterion():
     return torch.nn.SmoothL1Loss(beta=1.0)'''

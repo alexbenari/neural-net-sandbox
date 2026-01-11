@@ -66,20 +66,18 @@ class TestDatasetGeneration(unittest.TestCase):
             test_values = self.values[format_name]["test"]
             self.assertFalse(train_values.intersection(test_values))
 
-    def test_eval_contains_1_to_1000(self):
+    def test_train_contains_0_to_1000(self):
         for format_name in self.parsers:
-            eval_values = self.values[format_name]["eval"]
-            for value in range(1, 1001):
-                self.assertIn(value, eval_values)
+            train_values = self.values[format_name]["train"]
+            for value in range(0, 1001):
+                self.assertIn(value, train_values)
 
     def test_eval_disjoint_from_train_test(self):
         for format_name in self.parsers:
             eval_values = self.values[format_name]["eval"]
             train_values = self.values[format_name]["train"]
             test_values = self.values[format_name]["test"]
-            overlapping = eval_values.intersection(train_values)
-            self.assertTrue(all(value <= 1000 for value in overlapping))
-            self.assertEqual(overlapping, set(range(0, 1001)).intersection(train_values))
+            self.assertFalse(eval_values.intersection(train_values))
             self.assertFalse(eval_values.intersection(test_values))
 
 

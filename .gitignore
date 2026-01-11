@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 /__pycache__
 /__pycache__
+__pycache__/nets.cpython-39.pyc
+__pycache__/data_generation.cpython-39.pyc

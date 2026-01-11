@@ -16,8 +16,7 @@ class DataSetGenerator:
         test_size=10_000,
         eval_size=10_000,
         min_value=0,
-        max_value=999_000_000,
-        split_max=600_000_000,
+        max_value=999_999_999,
         digits_width=9,
         binary_width=30,
         seed=42,
@@ -28,7 +27,6 @@ class DataSetGenerator:
         self.eval_size = eval_size
         self.min_value = min_value
         self.max_value = max_value
-        self.split_max = split_max
         self.digits_width = digits_width
         self.binary_width = binary_width
         self.rng = random.Random(seed)
@@ -42,7 +40,7 @@ class DataSetGenerator:
     def _sample_train_values(self):
         values = set(range(0, 1001))
         while len(values) < self.train_size:
-            value = self.rng.randint(self.min_value, self.split_max)
+            value = self.rng.randint(self.min_value, self.max_value)
             values.add(value)
         return values
 
@@ -60,18 +58,17 @@ class DataSetGenerator:
         test_values = self._sample_unique(
             self.test_size,
             self.min_value,
-            self.split_max,
+            self.max_value,
             train_values,
         )
-        eval_values = set(eval_seed_values)
+        eval_values = set()
         excluded_eval = set(train_values)
         excluded_eval.update(test_values)
-        random_eval_size = max(self.eval_size - len(eval_seed_values), 0)
         eval_random_values = self._sample_unique(
-            random_eval_size,
+            self.eval_size,
             self.min_value,
             self.max_value,
-            excluded_eval.union(eval_values),
+            excluded_eval,
         )
         eval_values.update(eval_random_values)
         return {
