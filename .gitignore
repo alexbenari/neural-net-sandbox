@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+runs/
 /__pycache__
 /__pycache__
 __pycache__/nets.cpython-39.pyc

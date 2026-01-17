@@ -94,23 +94,9 @@ class DataSetGenerator:
     def generate_int_format(self, values_by_split):
         self._write_split("int", lambda value: str(value), values_by_split)
 
-    def generate_digits_format(self, values_by_split):
-        def formatter(value):
-            return str(value).zfill(self.digits_width)
-
-        self._write_split("digits", formatter, values_by_split)
-
-    def generate_binary_format(self, values_by_split):
-        def formatter(value):
-            return format(value, "b").zfill(self.binary_width)
-
-        self._write_split("binary", formatter, values_by_split)
-
     def generate_all(self):
         values_by_split = self._generate_values()
         self.generate_int_format(values_by_split)
-        self.generate_digits_format(values_by_split)
-        self.generate_binary_format(values_by_split)
 
 
 class IntDataset(Dataset):
@@ -132,25 +118,6 @@ class IntDataset(Dataset):
         return value, target
 
 
-class DigitsDataset(Dataset):
-    def __init__(self, csv_path):
-        self.rows = []
-        with open(csv_path, newline="", encoding="utf-8") as handle:
-            reader = csv.reader(handle)
-            for row in reader:
-                if row:
-                    self.rows.append(row)
-
-    def __len__(self):
-        return len(self.rows)
-
-    def __getitem__(self, index):
-        digits_str, target_str = self.rows[index]
-        digits = torch.tensor([int(ch) for ch in digits_str], dtype=torch.float32)
-        target = torch.tensor([float(target_str)], dtype=torch.float32)
-        return digits, target
-
-
 class DigitOneHotWrapper(Dataset):
     def __init__(self, dataset):
         self.dataset = dataset
@@ -166,20 +133,43 @@ class DigitOneHotWrapper(Dataset):
         return vector, target
 
 
-class BinaryDataset(Dataset):
-    def __init__(self, csv_path):
-        self.rows = []
-        with open(csv_path, newline="", encoding="utf-8") as handle:
-            reader = csv.reader(handle)
-            for row in reader:
-                if row:
-                    self.rows.append(row)
+class DigitsDatasetWrapper(Dataset):
+    def __init__(self, dataset, digits_width=9):
+        self.dataset = dataset
+        self.digits_width = digits_width
 
     def __len__(self):
-        return len(self.rows)
+        return len(self.dataset)
 
     def __getitem__(self, index):
-        bits_str, target_str = self.rows[index]
+        value, target = self.dataset[index]
+        digits_str = str(int(value.item())).zfill(self.digits_width)
+        digits = torch.tensor([int(ch) for ch in digits_str], dtype=torch.float32)
+        return digits, target
+
+
+class BinaryDatasetWrapper(Dataset):
+    def __init__(self, dataset, binary_width=30):
+        self.dataset = dataset
+        self.binary_width = binary_width
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        value, target = self.dataset[index]
+        bits_str = format(int(value.item()), "b").zfill(self.binary_width)
         bits = torch.tensor([int(bit) for bit in bits_str], dtype=torch.float32)
-        target = torch.tensor([float(target_str)], dtype=torch.float32)
         return bits, target
+
+
+class ZeroedInputsDataset(Dataset):
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        data, label = self.dataset[index]
+        return torch.zeros_like(data), label
