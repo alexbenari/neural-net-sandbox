@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 runs/
+tests/data-probes/
 /__pycache__
 /__pycache__
 __pycache__/nets.cpython-39.pyc
