@@ -16,8 +16,6 @@ class TestDatasetGeneration(unittest.TestCase):
         generator.generate_all()
         cls.parsers = {
             "int": lambda value: int(value),
-            "digits": lambda value: int(value),
-            "binary": lambda value: int(value, 2),
         }
         cls.rows = {}
         cls.values = {}
