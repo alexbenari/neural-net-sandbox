@@ -79,7 +79,9 @@ def train(
     global_step=0,
 ):
     model = model.to(device)
-    print(model)
+    #print model parameter count
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Model parameter count: {total_params}")
 
     criterion = make_criterion()
 
@@ -96,11 +98,7 @@ def train(
     data_loader = DataLoader(training_set, batch_size=batch_size, shuffle=True)
     dataset_size = len(training_set)
     print(f"Dataset size: {dataset_size}, batch size: {batch_size}, epochs: {epochs}")
-    if writer is not None:
-        sample_batch = next(iter(data_loader))[0]
-        if not preload:
-            sample_batch = sample_batch.to(device)
-        writer.add_graph(model, sample_batch)
+    # Skip add_graph to avoid sync overhead in training.
     for epoch in range(epochs):
         epoch_start = time.perf_counter()
         running_loss = torch.tensor(0.0, device=device)
@@ -118,10 +116,6 @@ def train(
             loss.backward()
             optimizer.step()
             rounded_outputs = torch.round(outputs)
-            batch_accuracy = (rounded_outputs == labels).float().mean().item()
-            if writer is not None:
-                writer.add_scalar("train/loss", loss.item(), global_step)
-                writer.add_scalar("train/accuracy", batch_accuracy, global_step)
             global_step += 1
             batch_size_actual = labels.size(0)
             running_loss += loss.detach() * batch_size_actual
@@ -153,7 +147,7 @@ def train(
             print(f"Epoch [{epoch + 1}/{epochs}] last 20 samples:")
             for line in last_samples:
                 print(line)
-    return accuracy, global_step
+    return avg_loss, accuracy, global_step
 
 
 def evaluate(model, dataset, batch_size=32, device="cpu", preload=True, label="Test"):
@@ -333,6 +327,81 @@ def model_sanity(
     )
 
 
+def wrap_dataset_for_input_type(dataset, input_type):
+    if input_type in ("digit", "digit1h"):
+        dataset = DigitsDatasetWrapper(dataset)
+    if input_type == "digit1h":
+        dataset = DigitOneHotWrapper(dataset)
+    if input_type == "binary":
+        dataset = BinaryDatasetWrapper(dataset)
+    return dataset
+
+
+def _model_name_for_save(
+    input_type,
+    optimizer_name,
+    learning_rate,
+    batch_size,
+    epochs,
+):
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    lr_value = str(learning_rate).replace(".", "p")
+    return (
+        f"{input_type}-{optimizer_name}-lr{lr_value}-bs{batch_size}-ep{epochs}-"
+        f"{timestamp}"
+    )
+
+
+def _model_path_from_name(model_name):
+    filename = model_name if model_name.endswith(".pt") else f"{model_name}.pt"
+    return os.path.join("models", filename)
+
+
+def save_model(model, metadata, model_name):
+    os.makedirs("models", exist_ok=True)
+    path = _model_path_from_name(model_name)
+    torch.save({"model_state": model.state_dict(), "metadata": metadata}, path)
+    print(f"Saved model to {path}")
+
+
+def list_models():
+    models_dir = "models"
+    if not os.path.isdir(models_dir):
+        return []
+    entries = [
+        entry
+        for entry in os.scandir(models_dir)
+        if entry.is_file() and entry.name.endswith(".pt")
+    ]
+    entries.sort(key=lambda entry: entry.stat().st_mtime, reverse=True)
+    return [os.path.splitext(entry.name)[0] for entry in entries]
+
+
+def evaluate_and_log(writer, model, dataset, batch_size, device, preload, label, tag):
+    loss, accuracy = evaluate(
+        model,
+        dataset,
+        batch_size=batch_size,
+        device=device,
+        preload=preload,
+        label=label,
+    )
+    writer.add_scalar(f"{tag}/final_loss", loss, 0)
+    writer.add_scalar(f"{tag}/final_accuracy", accuracy, 0)
+    return loss, accuracy
+
+
+def load_model(model_path, model_map):
+    checkpoint = torch.load(model_path, map_location="cpu")
+    metadata = checkpoint.get("metadata", {})
+    input_type = metadata.get("input_type")
+    if input_type not in model_map:
+        raise ValueError(f"Unknown input type in metadata: {input_type}")
+    model = model_map[input_type]()
+    model.load_state_dict(checkpoint["model_state"])
+    return model, metadata
+
+
 def overfit_to_small_batch(
     model,
     dataset,
@@ -388,42 +457,6 @@ def _bits_tensor_to_int(bits):
     return int("".join(str(int(value.item())) for value in bits), 2)
 
 
-def log_overfit_predictions(model, dataset, input_type, device, indices):
-    model.eval()
-    with torch.no_grad():
-        for index in indices:
-            data, target = dataset[index]
-            if input_type == "digit1h":
-                digits = data.view(-1, 10).argmax(dim=1)
-                input_value = _digits_tensor_to_int(digits)
-                model_input = data
-            elif input_type == "digit":
-                input_value = _digits_tensor_to_int(data)
-                model_input = data
-            elif input_type == "binary":
-                input_value = _bits_tensor_to_int(data)
-                model_input = data
-            else:
-                input_value = int(data.item())
-                model_input = data
-
-            model_input = model_input.to(device)
-            target = target.to(device)
-            output = model(model_input.unsqueeze(0))
-            pred = output.squeeze(0)
-            rounded = torch.round(pred)
-            abs_error = torch.abs(pred - target.squeeze(0))
-            print(
-                "sample "
-                f"input={input_value} "
-                f"target={target.item():.0f} "
-                f"pred={pred.item():.4f} "
-                f"rounded={rounded.item():.0f} "
-                f"abs_err={abs_error.item():.4f}"
-            )
-    model.train()
-
-
 def main():
     parser = cmdline_parser()
     args = parser.parse_args()
@@ -438,14 +471,64 @@ def main():
         run_data_probes()
         return
 
+    if args.models:
+        models = list_models()
+        if not models:
+            print("No saved models found.")
+        else:
+            for name in models:
+                print(name)
+        return
+
     if args.input_type and not args.train:
         parser.error("--input-type requires --train.")
-    if (args.test or args.eval) and not args.train:
-        parser.error("--test and --eval require --train.")
-    if args.overfit and not args.train:
-        parser.error("--overfit requires --train.")
     if args.sanity and not args.train:
         parser.error("--sanity requires --train.")
+
+    model_map = {
+        "int": SimpleMLPForInt,
+        "digit": SimpleMLPForDigits,
+        "digit1h": SimpleMLPForDigit1H,
+        "binary": SimpleMLPForBinary,
+    }
+
+    if args.eval:
+        model_path = _model_path_from_name(args.eval)
+        if not os.path.isfile(model_path):
+            parser.error(f"Model not found: {model_path}")
+        model, metadata = load_model(model_path, model_map)
+        input_type = metadata.get("input_type")
+        if input_type not in model_map:
+            parser.error(f"Unknown input type in metadata: {input_type}")
+        test_dataset, eval_dataset = get_avaluation_sets(input_type)
+        model = model.to(device)
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        run_name = f"eval-{args.eval}-{timestamp}"
+        log_dir = os.path.join("runs", run_name)
+        writer = SummaryWriter(log_dir=log_dir)
+        batch_size = metadata.get("batch_size", args.batch_size)
+        evaluate_and_log(
+            writer,
+            model,
+            test_dataset,
+            batch_size=batch_size,
+            device=device,
+            preload=args.preload,
+            label="Test",
+            tag="test",
+        )
+        evaluate_and_log(
+            writer,
+            model,
+            eval_dataset,
+            batch_size=batch_size,
+            device=device,
+            preload=args.preload,
+            label="Eval",
+            tag="eval",
+        )
+        writer.close()
+        return
 
     if args.train:
         input_type = args.input_type or "int"
@@ -462,31 +545,12 @@ def main():
             "binary": "int",
         }
 
-        model_map = {
-            "int": SimpleMLPForInt,
-            "digit": SimpleMLPForDigits,
-            "digit1h": SimpleMLPForDigit1H,
-            "binary": SimpleMLPForBinary,
-        }
-
         dataset_cls = dataset_map[input_type]
         prefix = prefix_map[input_type]
         train_dataset = dataset_cls(os.path.join("data", f"{prefix}-train.csv"))
         test_dataset = dataset_cls(os.path.join("data", f"{prefix}-test.csv"))
-        if input_type in ("digit", "digit1h"):
-            train_dataset = DigitsDatasetWrapper(train_dataset)
-            test_dataset = DigitsDatasetWrapper(test_dataset)
-        if input_type == "digit1h":
-            train_dataset = DigitOneHotWrapper(train_dataset)
-            test_dataset = DigitOneHotWrapper(test_dataset)
-        if input_type == "binary":
-            train_dataset = BinaryDatasetWrapper(train_dataset)
-            test_dataset = BinaryDatasetWrapper(test_dataset)
-        if args.overfit:
-            rng = random.Random(42)
-            sample_size = min(args.overfit_size, len(train_dataset))
-            indices = rng.sample(range(len(train_dataset)), sample_size)
-            train_dataset = Subset(train_dataset, indices)
+        train_dataset = wrap_dataset_for_input_type(train_dataset, input_type)
+        test_dataset = wrap_dataset_for_input_type(test_dataset, input_type)
         model = model_map[input_type]()
         if args.sanity:
             rng = random.Random(42)
@@ -501,15 +565,8 @@ def main():
                 eval_indices = rng.sample(range(len(eval_dataset)), eval_limit)
                 eval_dataset = Subset(eval_dataset, eval_indices)
 
-            if input_type in ("digit", "digit1h"):
-                train_dataset = DigitsDatasetWrapper(train_dataset)
-                eval_dataset = DigitsDatasetWrapper(eval_dataset)
-            if input_type == "digit1h":
-                train_dataset = DigitOneHotWrapper(train_dataset)
-                eval_dataset = DigitOneHotWrapper(eval_dataset)
-            if input_type == "binary":
-                train_dataset = BinaryDatasetWrapper(train_dataset)
-                eval_dataset = BinaryDatasetWrapper(eval_dataset)
+            train_dataset = wrap_dataset_for_input_type(train_dataset, input_type)
+            eval_dataset = wrap_dataset_for_input_type(eval_dataset, input_type)
             model_sanity(
                 model,
                 train_dataset,
@@ -524,75 +581,82 @@ def main():
             )
             return
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        run_name = args.run_name or f"{input_type}-{timestamp}"
+        model_name = None
+        if args.save_model is not None and args.save_model != "":
+            model_name = args.save_model
+        run_name = args.run_name or model_name or f"{input_type}-{timestamp}"
         log_dir = os.path.join("runs", run_name)
         writer = SummaryWriter(log_dir=log_dir)
-        accuracy, global_step = train(
+        train_loss, train_accuracy, global_step = train(
             model,
             train_dataset,
-            epochs=500 if args.overfit else args.epochs,
+            epochs=args.epochs,
             batch_size=args.batch_size,
             optimizer_name=args.optimizer,
             learning_rate=args.lr,
             device=device,
             preload=args.preload,
-            log_per_epoch=not args.overfit,
+            log_per_epoch=True,
             input_type=input_type,
             verbose_samples=args.verbose,
             writer=writer,
             global_step=0,
         )
-        if args.overfit:
-            print(f"Overfit training accuracy: {accuracy:.4f}")
-            writer.close()
-            if args.verbose:
-                base_dataset = dataset_cls(os.path.join("data", f"{prefix}-train.csv"))
-                if input_type in ("digit", "digit1h"):
-                    base_dataset = DigitsDatasetWrapper(base_dataset)
-                if input_type == "digit1h":
-                    base_dataset = DigitOneHotWrapper(base_dataset)
-                if input_type == "binary":
-                    base_dataset = BinaryDatasetWrapper(base_dataset)
-                log_overfit_predictions(
-                    model,
-                    base_dataset,
-                    input_type,
-                    device,
-                    indices,
-                )
-            return
-        run_test = args.test or (not args.test and not args.eval)
-        run_eval = args.eval or (not args.test and not args.eval)
+        run_test = True
+        run_eval = True
+        final_loss = train_loss
+        final_accuracy = train_accuracy
+        final_source = "train"
         if run_test:
-            test_loss, test_accuracy = evaluate(
+            test_loss, test_accuracy = evaluate_and_log(
+                writer,
                 model,
                 test_dataset,
                 batch_size=args.batch_size,
                 device=device,
                 preload=args.preload,
                 label="Test",
+                tag="test",
             )
-            writer.add_scalar("test/loss", test_loss, global_step)
-            writer.add_scalar("test/accuracy", test_accuracy, global_step)
+            final_loss = test_loss
+            final_accuracy = test_accuracy
+            final_source = "test"
         if run_eval:
             eval_dataset = dataset_cls(os.path.join("data", f"{prefix}-eval.csv"))
-            if input_type in ("digit", "digit1h"):
-                eval_dataset = DigitsDatasetWrapper(eval_dataset)
-            if input_type == "digit1h":
-                eval_dataset = DigitOneHotWrapper(eval_dataset)
-            if input_type == "binary":
-                eval_dataset = BinaryDatasetWrapper(eval_dataset)
-            eval_loss, eval_accuracy = evaluate(
+            eval_dataset = wrap_dataset_for_input_type(eval_dataset, input_type)
+            eval_loss, eval_accuracy = evaluate_and_log(
+                writer,
                 model,
                 eval_dataset,
                 batch_size=args.batch_size,
                 device=device,
                 preload=args.preload,
                 label="Eval",
+                tag="eval",
             )
-            writer.add_scalar("eval/loss", eval_loss, global_step)
-            writer.add_scalar("eval/accuracy", eval_accuracy, global_step)
+            final_loss = eval_loss
+            final_accuracy = eval_accuracy
+            final_source = "eval"
         writer.close()
+        if args.save_model is not None:
+            model_name = model_name or _model_name_for_save(
+                input_type,
+                args.optimizer,
+                args.lr,
+                args.batch_size,
+                args.epochs,
+            )
+            metadata = {
+                "input_type": input_type,
+                "epochs_trained": args.epochs,
+                "optimizer": args.optimizer,
+                "batch_size": args.batch_size,
+                "learning_rate": args.lr,
+                "final_loss": final_loss,
+                "final_accuracy": final_accuracy,
+                "final_metrics_source": final_source,
+            }
+            save_model(model, metadata, model_name)
         return
 
     if args.generate_data:
@@ -613,6 +677,14 @@ def main():
 
 
     parser.print_help()
+
+def get_avaluation_sets(input_type):
+    dataset_cls = IntDataset
+    test_dataset = dataset_cls(os.path.join("data", "int-test.csv"))
+    eval_dataset = dataset_cls(os.path.join("data", "int-eval.csv"))
+    test_dataset = wrap_dataset_for_input_type(test_dataset, input_type)
+    eval_dataset = wrap_dataset_for_input_type(eval_dataset, input_type)
+    return test_dataset,eval_dataset
 
 def cmdline_parser():
     epilog = (
@@ -635,6 +707,16 @@ def cmdline_parser():
         "--train",
         action="store_true",
         help="Run the training loop.",
+    )
+    group.add_argument(
+        "--eval",
+        type=str,
+        help="Evaluate a saved model by name (from models/).",
+    )
+    group.add_argument(
+        "--models",
+        action="store_true",
+        help="List available saved models.",
     )
     group.add_argument(
         "--spell",
@@ -729,19 +811,14 @@ def cmdline_parser():
         help="Optional TensorBoard run name (subfolder under runs/).",
     )
     parser.add_argument(
-        "--test",
-        action="store_true",
-        help="Run evaluation on the test set after training.",
-    )
-    parser.add_argument(
-        "--eval",
-        action="store_true",
-        help="Run evaluation on the eval set after training.",
-    )
-    parser.add_argument(
-        "--overfit",
-        action="store_true",
-        help="Train on a small random subset and only report training accuracy.",
+        "--save-model",
+        nargs="?",
+        const="",
+        default=None,
+        help=(
+            "Save the trained model under models/. "
+            "Optionally provide a model name."
+        ),
     )
     parser.add_argument(
         "--sanity",
@@ -749,15 +826,9 @@ def cmdline_parser():
         help="Run a single-sample loss check and exit.",
     )
     parser.add_argument(
-        "--overfit-size",
-        type=int,
-        default=256,
-        help="Subset size to use for overfit mode.",
-    )
-    parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Print per-sample predictions in overfit mode.",
+        help="Print per-sample predictions in training.",
     )
     
     return parser
