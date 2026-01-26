@@ -87,7 +87,7 @@ def run_data_probes(output_path=None, open_browser=True):
     os.makedirs(assets_dir, exist_ok=True)
 
     formats = [
-        ("int", "int"),
+        ("normalized-int", "int"),
         ("digit", "int"),
         ("digit1h", "int"),
         ("binary", "int"),

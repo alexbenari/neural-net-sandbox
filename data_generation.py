@@ -133,6 +133,19 @@ class DigitOneHotWrapper(Dataset):
         return vector, target
 
 
+class NormalizedIntWrapper(Dataset):
+    def __init__(self, dataset, divisor=1_000_000_000):
+        self.dataset = dataset
+        self.divisor = divisor
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        value, target = self.dataset[index]
+        return value / self.divisor, target
+
+
 class DigitsDatasetWrapper(Dataset):
     def __init__(self, dataset, digits_width=9):
         self.dataset = dataset

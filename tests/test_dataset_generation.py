@@ -56,7 +56,7 @@ class TestDatasetGeneration(unittest.TestCase):
             for value_str, _ in rows:
                 value = parser(value_str)
                 self.assertGreaterEqual(value, 0)
-                self.assertLessEqual(value, 600000000)
+                self.assertLessEqual(value, 999999999)
 
     def test_train_test_disjoint(self):
         for format_name in self.parsers:

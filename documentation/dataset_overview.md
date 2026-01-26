@@ -5,17 +5,16 @@ This project trains a neural network to predict the length (in letters and space
 
 ## Dataset Structure
 Each dataset row has two columns:
-1. The input value in a chosen format.
-2. The target label: the count of letters and spaces in the spelled-out number.
+1. The input number
+2. The target label, i.e. the count of letters and spaces in the spelled-out number.
 
-Four formats are generated from the same underlying integer values:
-- `int`: raw integer as a string.
-- `digits`: zero-padded 9-digit string (MSB to LSB).
-- `digit1h`: uses the `digits` files, but consumed as a 90-length one-hot vector (10 per digit).
-- `binary`: zero-padded 30-bit string (MSB to LSB).
+An additional goal of this project is to experiment with the effect of input representation on training. Thus, the integer values are transformed as part of the dataset creatrion into one of four representations: 
+- normalized-int: the input integer value (parsed from the CSV). For training it is converted to a numeric tensor (float) and normalized (e.g., divided by 1000000000) before being passed to the model.
+-digits: a fixed-length sequence of 9 decimal digits representing a non-negative integer in base 10, left-zero-padded and ordered from most significant to least significant digit; each digit is subsequently encoded as an integer in {0,…,9}.
+- digit1h: a fixed-length representation of a non-negative integer in base-10, obtained by left-padding the integer to 9 digits and encoding each digit (from most significant to least significant) as a 10-dimensional one-hot vector; the final representation is the concatenation of these 9 vectors (total dimension 90).
+- binary: a fixed-length representation of a non-negative integer obtained by encoding its base-2 representation as a 30-dimensional vector of bits, ordered from most significant to least significant, with left-zero-padding applied to integers whose binary representation has fewer than 30 bits.
 
-Files are stored under `data/` with a format prefix:
-`int-train.csv`, `int-test.csv`, `int-eval.csv` (and the same for `digits` and `binary`).
+Files are stored under `data/` with a format prefix: `int-train.csv`, `int-test.csv`, `int-eval.csv` 
 
 ## Data Generation Rules
 - **Train (100K)**: includes all integers `0..1000`, plus random integers in `0..999999999` 

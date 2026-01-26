@@ -6,7 +6,7 @@ represent the same data as digits, one-hot digits, or binary inputs.
 ## Quick start
 
 ```bash
-python sandbox.py --train --input-type int
+python sandbox.py --train --input-type normalized-int
 ```
 
 ## Common training scenarios
@@ -28,7 +28,7 @@ python sandbox.py --train --input-type digit1h --optimizer adam --lr 0.0003
 Control batch size and epochs:
 
 ```bash
-python sandbox.py --train --input-type int --batch-size 128 --epochs 200
+python sandbox.py --train --input-type normalized-int --batch-size 128 --epochs 200
 ```
 
 Run sanity checks (short, targeted checks):

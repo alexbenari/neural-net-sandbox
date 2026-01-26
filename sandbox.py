@@ -1,9 +1,11 @@
 import argparse
 import collections
 import copy
+import json
 import os
 import random
 import time
+import warnings
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset, Subset
@@ -12,6 +14,7 @@ from torch.utils.tensorboard import SummaryWriter
 from data_generation import (
     DataSetGenerator,
     IntDataset,
+    NormalizedIntWrapper,
     DigitsDatasetWrapper,
     DigitOneHotWrapper,
     BinaryDatasetWrapper,
@@ -22,6 +25,8 @@ from nets import (
     SimpleMLPForDigits,
     SimpleMLPForDigit1H,
     SimpleMLPForBinary,
+    TowersMLPForDigit1H,
+    make_mlp,
 )
 from number_words import number_to_words
 
@@ -60,6 +65,8 @@ def _ints_from_inputs(data, input_type):
             bits = "".join(str(int(value.item())) for value in row)
             values.append(int(bits, 2))
         return values
+    if input_type == "normalized-int":
+        return [int(round(value.item() * 1_000_000_000)) for value in data.view(-1)]
     return [int(round(value.item())) for value in data.view(-1)]
 
 
@@ -70,16 +77,16 @@ def train(
     batch_size=32,
     optimizer_name="sgd",
     learning_rate=0.01,
+    weight_decay=None,
     device="cpu",
     preload=True,
     log_per_epoch=True,
-    input_type="int",
+    input_type="normalized-int",
     verbose_samples=False,
     writer=None,
     global_step=0,
 ):
     model = model.to(device)
-    #print model parameter count
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameter count: {total_params}")
 
@@ -92,7 +99,12 @@ def train(
         "rmsprop": optim.RMSprop,
         "adagrad": optim.Adagrad,
     }
-    optimizer = optimizer_map[optimizer_name](model.parameters(), lr=learning_rate)
+    if weight_decay is not None:
+        optimizer = optimizer_map[optimizer_name](
+            model.parameters(), lr=learning_rate, weight_decay=weight_decay
+        )
+    else:
+        optimizer = optimizer_map[optimizer_name](model.parameters(), lr=learning_rate)
 
     training_set = maybe_preload_dataset(training_set, device, preload)
     data_loader = DataLoader(training_set, batch_size=batch_size, shuffle=True)
@@ -103,12 +115,26 @@ def train(
         epoch_start = time.perf_counter()
         running_loss = torch.tensor(0.0, device=device)
         correct = torch.tensor(0.0, device=device)
+        within_half = torch.tensor(0.0, device=device)
+        within_one = torch.tensor(0.0, device=device)
         seen = 0
         last_samples = collections.deque(maxlen=20)
-        for data, labels in data_loader:
+        for batch_idx, (data, labels) in enumerate(data_loader, start=1):
             if not preload:
                 data = data.to(device)
                 labels = labels.to(device)
+            model_inputs = None
+            inputs = None
+            if verbose_samples:
+                data_cpu = data.detach().cpu()
+                inputs = data_cpu.view(data_cpu.size(0), -1)
+                model_inputs = []
+                for row in inputs:
+                    row_list = row.tolist()
+                    if input_type == "normalized-int":
+                        model_inputs.append(f"{row_list[0]:.9f}")
+                    else:
+                        model_inputs.append(str(row_list))
             outputs = model(data)
             assert outputs.shape == labels.shape
             loss = criterion(outputs, labels)
@@ -116,32 +142,46 @@ def train(
             loss.backward()
             optimizer.step()
             rounded_outputs = torch.round(outputs)
+            abs_error = torch.abs(outputs - labels)
             global_step += 1
             batch_size_actual = labels.size(0)
             running_loss += loss.detach() * batch_size_actual
             correct += (rounded_outputs == labels).sum()
+            within_half += (abs_error < 0.5).sum()
+            within_one += (abs_error < 1.0).sum()
             seen += batch_size_actual
             if verbose_samples:
-                inputs = _ints_from_inputs(data.detach().cpu(), input_type)
                 targets = labels.detach().cpu().view(-1).tolist()
                 preds = outputs.detach().cpu().view(-1).tolist()
-                for input_value, target, pred in zip(inputs, targets, preds):
+                print(f"Batch {batch_idx} samples:")
+                for idx, (input_value, target, pred) in enumerate(
+                    zip(inputs, targets, preds)
+                ):
+                    model_input_repr = model_inputs[idx]
                     rounded = round(pred)
                     abs_err = abs(pred - target)
-                    last_samples.append(
-                        f"sample input={input_value} target={int(target)} "
+                    line = (
+                        f"sample input={input_value} model_input={model_input_repr} "
+                        f"target={int(target)} "
                         f"pred={pred:.4f} rounded={rounded} abs_err={abs_err:.4f}"
                     )
+                    print(line)
+                    last_samples.append(line)
         avg_loss = (running_loss / max(seen, 1)).item()
         accuracy = (correct / max(seen, 1)).item()
+        within_half_ratio = (within_half / max(seen, 1)).item()
+        within_one_ratio = (within_one / max(seen, 1)).item()
         elapsed = time.perf_counter() - epoch_start
         if writer is not None:
             writer.add_scalar("train/epoch_loss", avg_loss, epoch + 1)
             writer.add_scalar("train/epoch_accuracy", accuracy, epoch + 1)
+            writer.add_scalar("train/epoch_within_0p5", within_half_ratio, epoch + 1)
+            writer.add_scalar("train/epoch_within_1p0", within_one_ratio, epoch + 1)
         if log_per_epoch:
             print(
                 f"Epoch [{epoch + 1}/{epochs}] avg loss: {avg_loss:.4f} "
-                f"accuracy: {accuracy:.4f} time: {elapsed:.2f}s"
+                f"accuracy: {accuracy:.4f} within0.5: {within_half_ratio:.4f} "
+                f"within1.0: {within_one_ratio:.4f} time: {elapsed:.2f}s"
             )
         if verbose_samples and last_samples:
             print(f"Epoch [{epoch + 1}/{epochs}] last 20 samples:")
@@ -157,6 +197,8 @@ def evaluate(model, dataset, batch_size=32, device="cpu", preload=True, label="T
     model.eval()
     running_loss = torch.tensor(0.0, device=device)
     correct = torch.tensor(0.0, device=device)
+    within_half = torch.tensor(0.0, device=device)
+    within_one = torch.tensor(0.0, device=device)
     seen = 0
     with torch.no_grad():
         for data, labels in data_loader:
@@ -169,11 +211,19 @@ def evaluate(model, dataset, batch_size=32, device="cpu", preload=True, label="T
             running_loss += loss.detach() * batch_size_actual
             rounded_outputs = torch.round(outputs)
             correct += (rounded_outputs == labels).sum()
+            abs_error = torch.abs(outputs - labels)
+            within_half += (abs_error < 0.5).sum()
+            within_one += (abs_error < 1.0).sum()
             seen += batch_size_actual
     avg_loss = (running_loss / max(seen, 1)).item()
     accuracy = (correct / max(seen, 1)).item()
-    print(f"{label} avg loss: {avg_loss:.4f} accuracy: {accuracy:.4f}")
-    return avg_loss, accuracy
+    within_half_ratio = (within_half / max(seen, 1)).item()
+    within_one_ratio = (within_one / max(seen, 1)).item()
+    print(
+        f"{label} avg loss: {avg_loss:.4f} accuracy: {accuracy:.4f} "
+        f"within0.5: {within_half_ratio:.4f} within1.0: {within_one_ratio:.4f}"
+    )
+    return avg_loss, accuracy, within_half_ratio, within_one_ratio
 
 
 def loss_vs_baseline_loss(model, dataset, device, batch_size, preload):
@@ -213,6 +263,7 @@ def train_vs_zeroed_inputs(
     batch_size,
     optimizer_name,
     learning_rate,
+    weight_decay,
     preload,
     epochs,
     input_type,
@@ -231,6 +282,7 @@ def train_vs_zeroed_inputs(
         batch_size=batch_size,
         optimizer_name=optimizer_name,
         learning_rate=learning_rate,
+        weight_decay=weight_decay,
         device=device,
         preload=preload,
         input_type=input_type,
@@ -245,6 +297,7 @@ def train_vs_zeroed_inputs(
         batch_size=batch_size,
         optimizer_name=optimizer_name,
         learning_rate=learning_rate,
+        weight_decay=weight_decay,
         device=device,
         preload=preload,
         input_type=input_type,
@@ -252,7 +305,7 @@ def train_vs_zeroed_inputs(
         writer=None,
     )
 
-    _, real_accuracy = evaluate(
+    _, real_accuracy, _, _ = evaluate(
         real_model,
         eval_dataset,
         batch_size=batch_size,
@@ -260,7 +313,7 @@ def train_vs_zeroed_inputs(
         preload=True,
         label="Sanity/Real inputs",
     )
-    _, zeroed_accuracy = evaluate(
+    _, zeroed_accuracy, _, _ = evaluate(
         zeroed_model,
         eval_dataset,
         batch_size=batch_size,
@@ -297,6 +350,7 @@ def model_sanity(
     batch_size,
     optimizer_name,
     learning_rate,
+    weight_decay,
     preload,
     epochs,
     input_type,
@@ -321,6 +375,7 @@ def model_sanity(
         batch_size,
         optimizer_name,
         learning_rate,
+        weight_decay,
         preload,
         epochs,
         input_type,
@@ -328,6 +383,8 @@ def model_sanity(
 
 
 def wrap_dataset_for_input_type(dataset, input_type):
+    if input_type == "normalized-int":
+        dataset = NormalizedIntWrapper(dataset)
     if input_type in ("digit", "digit1h"):
         dataset = DigitsDatasetWrapper(dataset)
     if input_type == "digit1h":
@@ -343,24 +400,45 @@ def _model_name_for_save(
     learning_rate,
     batch_size,
     epochs,
+    weight_decay,
 ):
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     lr_value = str(learning_rate).replace(".", "p")
+    if weight_decay is not None:
+        wd_value = str(weight_decay).replace(".", "p")
+        wd_label = f"-wd{wd_value}"
+    else:
+        wd_label = ""
     return (
-        f"{input_type}-{optimizer_name}-lr{lr_value}-bs{batch_size}-ep{epochs}-"
-        f"{timestamp}"
+        f"{input_type}-{optimizer_name}-lr{lr_value}{wd_label}-bs{batch_size}-"
+        f"ep{epochs}-{timestamp}"
     )
 
 
+def _sanitize_model_name(model_name):
+    if model_name is None:
+        return None
+    sanitized = model_name
+    for ch in (os.path.sep, os.path.altsep, ":", "/", "\\"):
+        if ch:
+            sanitized = sanitized.replace(ch, "_")
+    return sanitized
+
+
 def _model_path_from_name(model_name):
+    model_name = _sanitize_model_name(model_name)
     filename = model_name if model_name.endswith(".pt") else f"{model_name}.pt"
     return os.path.join("models", filename)
 
 
 def save_model(model, metadata, model_name):
     os.makedirs("models", exist_ok=True)
+    model_name = _sanitize_model_name(model_name)
     path = _model_path_from_name(model_name)
     torch.save({"model_state": model.state_dict(), "metadata": metadata}, path)
+    metadata_path = os.path.join("models", f"{model_name}.json")
+    with open(metadata_path, "w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, indent=2, sort_keys=True)
     print(f"Saved model to {path}")
 
 
@@ -378,7 +456,7 @@ def list_models():
 
 
 def evaluate_and_log(writer, model, dataset, batch_size, device, preload, label, tag):
-    loss, accuracy = evaluate(
+    loss, accuracy, within_half, within_one = evaluate(
         model,
         dataset,
         batch_size=batch_size,
@@ -388,18 +466,109 @@ def evaluate_and_log(writer, model, dataset, batch_size, device, preload, label,
     )
     writer.add_scalar(f"{tag}/final_loss", loss, 0)
     writer.add_scalar(f"{tag}/final_accuracy", accuracy, 0)
+    writer.add_scalar(f"{tag}/final_within_0p5", within_half, 0)
+    writer.add_scalar(f"{tag}/final_within_1p0", within_one, 0)
     return loss, accuracy
 
 
 def load_model(model_path, model_map):
-    checkpoint = torch.load(model_path, map_location="cpu")
-    metadata = checkpoint.get("metadata", {})
+    state_dict, metadata = _load_checkpoint(model_path)
     input_type = metadata.get("input_type")
+    if input_type == "int":
+        input_type = "normalized-int"
     if input_type not in model_map:
         raise ValueError(f"Unknown input type in metadata: {input_type}")
-    model = model_map[input_type]()
-    model.load_state_dict(checkpoint["model_state"])
+    state_dict = _normalize_state_dict_keys(state_dict)
+    model_sizes = metadata.get("model_sizes") or _infer_sizes_from_state_dict(
+        state_dict
+    )
+    if model_sizes:
+        model = make_mlp(model_sizes)
+    else:
+        model = model_map[input_type]()
+    model.load_state_dict(state_dict)
     return model, metadata
+
+
+def _infer_sizes_from_state_dict(state_dict):
+    layer_items = []
+    for key, tensor in state_dict.items():
+        if key.endswith(".weight") and key.startswith("layers."):
+            parts = key.split(".")
+            try:
+                idx = int(parts[1])
+            except (ValueError, IndexError):
+                continue
+            out_features, in_features = tensor.shape
+            layer_items.append((idx, in_features, out_features))
+    if not layer_items:
+        return []
+    layer_items.sort()
+    sizes = [layer_items[0][1]]
+    sizes.extend(item[2] for item in layer_items)
+    return sizes
+
+
+def _load_checkpoint(model_path):
+    metadata = _load_metadata_sidecar(model_path)
+    checkpoint = torch.load(model_path, map_location="cpu", weights_only=True)
+    if isinstance(checkpoint, dict) and "model_state" in checkpoint:
+        state_dict = checkpoint["model_state"]
+    else:
+        state_dict = checkpoint
+    if not metadata:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=FutureWarning)
+            full_checkpoint = torch.load(model_path, map_location="cpu")
+        metadata = full_checkpoint.get("metadata", {})
+        if isinstance(full_checkpoint, dict) and "model_state" in full_checkpoint:
+            state_dict = full_checkpoint["model_state"]
+    return state_dict, metadata
+
+
+def _load_metadata_sidecar(model_path):
+    base_name = os.path.splitext(os.path.basename(model_path))[0]
+    metadata_path = os.path.join("models", f"{base_name}.json")
+    if not os.path.isfile(metadata_path):
+        return {}
+    with open(metadata_path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _normalize_state_dict_keys(state_dict):
+    if any(key.startswith("layers.") for key in state_dict):
+        return state_dict
+    if all(key.startswith("net.layers.") for key in state_dict):
+        normalized = {}
+        for key, value in state_dict.items():
+            normalized[key.replace("net.", "", 1)] = value
+        return normalized
+    return state_dict
+
+
+def _extract_model_sizes(model):
+    if not hasattr(model, "net"):
+        return []
+    layers = getattr(model.net, "layers", None)
+    if not layers:
+        return []
+    sizes = [layers[0].in_features]
+    sizes.extend(layer.out_features for layer in layers)
+    return sizes
+
+
+def print_model_parameters(model):
+    total_params = 0
+    print("Model parameters:")
+    for name, param in model.named_parameters():
+        num_params = param.numel()
+        total_params += num_params
+        param_norm = param.detach().norm().item()
+        print(
+            f"- {name}: shape={tuple(param.shape)} params={num_params} "
+            f"norm={param_norm:.6f}"
+        )
+    print(f"Total parameters: {total_params}")
 
 
 def overfit_to_small_batch(
@@ -409,6 +578,7 @@ def overfit_to_small_batch(
     batch_size,
     optimizer_name,
     learning_rate,
+    weight_decay,
     preload,
     epochs,
     input_type,
@@ -430,13 +600,14 @@ def overfit_to_small_batch(
         batch_size=batch_size,
         optimizer_name=optimizer_name,
         learning_rate=learning_rate,
+        weight_decay=weight_decay,
         device=device,
         preload=preload,
         input_type=input_type,
         log_per_epoch=False,
         writer=None,
     )
-    avg_loss, _ = evaluate(
+    avg_loss, _, _, _ = evaluate(
         overfit_model,
         small_dataset,
         batch_size=batch_size,
@@ -471,6 +642,15 @@ def main():
         run_data_probes()
         return
 
+    model_map = {
+        "normalized-int": SimpleMLPForInt,
+        "digit": SimpleMLPForDigits,
+        #"digit1h": SimpleMLPForDigit1H,
+        "digit1h": TowersMLPForDigit1H,
+        "binary": SimpleMLPForBinary,
+    }
+    
+
     if args.models:
         models = list_models()
         if not models:
@@ -480,17 +660,38 @@ def main():
                 print(name)
         return
 
+    if args.model:
+        model_path = _model_path_from_name(args.model)
+        if not os.path.isfile(model_path):
+            parser.error(f"Model not found: {model_path}")
+        _, metadata = _load_checkpoint(model_path)
+        if not metadata:
+            print("No metadata found in model.")
+        else:
+            for key in sorted(metadata.keys()):
+                print(f"{key}: {metadata[key]}")
+        try:
+            model, metadata = load_model(model_path, model_map)
+        except Exception as exc:
+            print(f"ERROR: Failed to load model: {exc}")
+            return
+        input_type = metadata.get("input_type")
+        if input_type == "int":
+            input_type = "normalized-int"
+        print(f"Model input type: {input_type}")
+        print_model_parameters(model)
+        return
+
     if args.input_type and not args.train:
         parser.error("--input-type requires --train.")
     if args.sanity and not args.train:
         parser.error("--sanity requires --train.")
-
-    model_map = {
-        "int": SimpleMLPForInt,
-        "digit": SimpleMLPForDigits,
-        "digit1h": SimpleMLPForDigit1H,
-        "binary": SimpleMLPForBinary,
-    }
+    if args.weight_decay is not None:
+        supported = {"sgd", "adam", "adamw", "rmsprop", "adagrad"}
+        if args.optimizer not in supported:
+            parser.error(
+                f"--weight-decay is not supported for optimizer {args.optimizer}."
+            )
 
     if args.eval:
         model_path = _model_path_from_name(args.eval)
@@ -531,15 +732,15 @@ def main():
         return
 
     if args.train:
-        input_type = args.input_type or "int"
+        input_type = args.input_type or "normalized-int"
         dataset_map = {
-            "int": IntDataset,
+            "normalized-int": IntDataset,
             "digit": IntDataset,
             "digit1h": IntDataset,
             "binary": IntDataset,
         }
         prefix_map = {
-            "int": "int",
+            "normalized-int": "int",
             "digit": "int",
             "digit1h": "int",
             "binary": "int",
@@ -575,6 +776,7 @@ def main():
                 args.batch_size,
                 args.optimizer,
                 args.lr,
+                args.weight_decay,
                 args.preload,
                 args.sanity_epochs,
                 input_type,
@@ -594,6 +796,7 @@ def main():
             batch_size=args.batch_size,
             optimizer_name=args.optimizer,
             learning_rate=args.lr,
+            weight_decay=args.weight_decay,
             device=device,
             preload=args.preload,
             log_per_epoch=True,
@@ -645,16 +848,21 @@ def main():
                 args.lr,
                 args.batch_size,
                 args.epochs,
+                args.weight_decay,
             )
+            parameter_count = sum(p.numel() for p in model.parameters())
             metadata = {
                 "input_type": input_type,
                 "epochs_trained": args.epochs,
                 "optimizer": args.optimizer,
                 "batch_size": args.batch_size,
                 "learning_rate": args.lr,
+                "weight_decay": args.weight_decay,
                 "final_loss": final_loss,
                 "final_accuracy": final_accuracy,
                 "final_metrics_source": final_source,
+                "model_sizes": _extract_model_sizes(model),
+                "parameter_count": parameter_count,
             }
             save_model(model, metadata, model_name)
         return
@@ -670,9 +878,23 @@ def main():
         return
 
     if args.spell is not None:
-        words = number_to_words(args.spell)
-        print(words)
-        print(len(words))
+        value = args.spell
+        words = number_to_words(value)
+        digits_str = str(value).zfill(9)
+        binary_str = format(value, "b").zfill(30)
+        normalized_value = value / 1_000_000_000
+        one_hot_chunks = []
+        for ch in digits_str:
+            chunk = ["0"] * 10
+            chunk[int(ch)] = "1"
+            one_hot_chunks.append("".join(chunk))
+        print(f"Number: {value}")
+        print(f"Words: {words}")
+        print(f"Length: {len(words)}")
+        print(f"normalized-int: {normalized_value:.9f}")
+        print(f"digits: {digits_str}")
+        print(f"digit1h: {' '.join(one_hot_chunks)}")
+        print(f"binary: {binary_str}")
         return
 
 
@@ -689,7 +911,7 @@ def get_avaluation_sets(input_type):
 def cmdline_parser():
     epilog = (
         "Legal options:\n"
-        "  --input-type: int | digit | digit1h | binary\n"
+        "  --input-type: normalized-int | digit | digit1h | binary\n"
         "  --optimizer: sgd | adam | adamw | rmsprop | adagrad\n"
     )
     parser = argparse.ArgumentParser(
@@ -717,6 +939,11 @@ def cmdline_parser():
         "--models",
         action="store_true",
         help="List available saved models.",
+    )
+    group.add_argument(
+        "--model",
+        type=str,
+        help="Print metadata and parameters for a saved model by name (from models/).",
     )
     group.add_argument(
         "--spell",
@@ -771,9 +998,12 @@ def cmdline_parser():
     )
     parser.add_argument(
         "--input-type",
-        choices=["int", "digit", "digit1h", "binary"],
+        choices=["normalized-int", "digit", "digit1h", "binary"],
         default=None,
-        help="Input format to use for training: int, digit, digit1h, or binary.",
+        help=(
+            "Input format to use for training: normalized-int, digit, digit1h, "
+            "or binary."
+        ),
     )
     parser.add_argument(
         "--batch-size",
@@ -804,6 +1034,12 @@ def cmdline_parser():
         type=float,
         default=0.01,
         help="Learning rate for the optimizer.",
+    )
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=None,
+        help="Weight decay for optimizers that support it (e.g., adamw).",
     )
     parser.add_argument(
         "--run-name",
