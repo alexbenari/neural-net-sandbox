@@ -43,6 +43,17 @@ def make_mlp(sizes, activation=nn.ReLU, final_bias=0.0, bias=True):
     return _MLP(sizes, activation, final_bias, bias)
 
 
+def get_activation(name):
+    activation_map = {
+        "relu": nn.ReLU,
+        "gelu": nn.GELU,
+        "silu": nn.SiLU,
+    }
+    if name not in activation_map:
+        raise ValueError(f"Unsupported activation: {name}")
+    return activation_map[name]
+
+
 class SimpleMLPForInt(nn.Module):
     def __init__(self):
         super(SimpleMLPForInt, self).__init__()
@@ -77,21 +88,56 @@ class SimpleMLPForDigit1H(nn.Module):
 
 
 class TowersMLPForDigit1H(nn.Module):
-    def __init__(self):
+    def __init__(
+        self,
+        digit_embedding_dim=24,
+        tower_hidden_dim=256,
+        tower_hidden_layers=2,
+        chunk_dim=64,
+        attn_heads=2,
+        ff_hidden_dim=128,
+        head_hidden_dim=128,
+        head_hidden_layers=1,
+        activation_name="silu",
+        pooling="flatten",
+        use_digit_position_embedding=True,
+        use_chunk_position_embedding=True,
+        use_attention=True,
+        use_ff=True,
+    ):
         super(TowersMLPForDigit1H, self).__init__()
-        self.digit_embedding = nn.Linear(10, 24, bias=False)
-        self.digit_position_embedding = nn.Parameter(torch.zeros(9, 24))
-        self.chunk_position_embedding = nn.Parameter(torch.zeros(3, 64))
-        self.tower = make_mlp([72, 256, 256, 64], activation=nn.SiLU)
-        self.attn_norm = nn.LayerNorm(64)
-        self.attn = nn.MultiheadAttention(64, num_heads=2, batch_first=True)
-        self.ff_norm = nn.LayerNorm(64)
+        if chunk_dim % attn_heads != 0:
+            raise ValueError("chunk_dim must be divisible by attn_heads")
+        if pooling not in {"flatten", "mean"}:
+            raise ValueError("pooling must be 'flatten' or 'mean'")
+
+        activation = get_activation(activation_name)
+        tower_input_dim = 3 * digit_embedding_dim
+        tower_sizes = [tower_input_dim] + [tower_hidden_dim] * tower_hidden_layers + [chunk_dim]
+        head_input_dim = 3 * chunk_dim if pooling == "flatten" else chunk_dim
+        head_sizes = [head_input_dim] + [head_hidden_dim] * head_hidden_layers + [1]
+
+        self.use_digit_position_embedding = use_digit_position_embedding
+        self.use_chunk_position_embedding = use_chunk_position_embedding
+        self.use_attention = use_attention
+        self.use_ff = use_ff
+        self.pooling = pooling
+        self.chunk_dim = chunk_dim
+        self.digit_embedding_dim = digit_embedding_dim
+
+        self.digit_embedding = nn.Linear(10, digit_embedding_dim, bias=False)
+        self.digit_position_embedding = nn.Parameter(torch.zeros(9, digit_embedding_dim))
+        self.chunk_position_embedding = nn.Parameter(torch.zeros(3, chunk_dim))
+        self.tower = make_mlp(tower_sizes, activation=activation)
+        self.attn_norm = nn.LayerNorm(chunk_dim)
+        self.attn = nn.MultiheadAttention(chunk_dim, num_heads=attn_heads, batch_first=True)
+        self.ff_norm = nn.LayerNorm(chunk_dim)
         self.ff = nn.Sequential(
-            nn.Linear(64, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
+            nn.Linear(chunk_dim, ff_hidden_dim),
+            activation(),
+            nn.Linear(ff_hidden_dim, chunk_dim),
         )
-        self.head = make_mlp([192, 128, 1], activation=nn.SiLU)
+        self.head = make_mlp(head_sizes, activation=activation)
         nn.init.normal_(self.digit_position_embedding, mean=0.0, std=0.02)
         nn.init.normal_(self.chunk_position_embedding, mean=0.0, std=0.02)
 
@@ -99,17 +145,26 @@ class TowersMLPForDigit1H(nn.Module):
         batch_size = x.size(0)
         digits = x.view(batch_size, 9, 10)
         digits = self.digit_embedding(digits)
-        digits = digits + self.digit_position_embedding.unsqueeze(0)
-        chunks = digits.view(batch_size, 3, 72)
+        if self.use_digit_position_embedding:
+            digits = digits + self.digit_position_embedding.unsqueeze(0)
+        chunks = digits.view(batch_size, 3, 3 * self.digit_embedding_dim)
         chunks = self.tower(chunks)
-        chunks = chunks + self.chunk_position_embedding.unsqueeze(0)
+        if self.use_chunk_position_embedding:
+            chunks = chunks + self.chunk_position_embedding.unsqueeze(0)
 
-        attn_input = self.attn_norm(chunks)
-        attn_output, _ = self.attn(attn_input, attn_input, attn_input, need_weights=False)
-        chunks = chunks + attn_output
-        chunks = chunks + self.ff(self.ff_norm(chunks))
+        if self.use_attention:
+            attn_input = self.attn_norm(chunks)
+            attn_output, _ = self.attn(attn_input, attn_input, attn_input, need_weights=False)
+            chunks = chunks + attn_output
+        if self.use_ff:
+            chunks = chunks + self.ff(self.ff_norm(chunks))
 
-        return self.head(chunks.reshape(batch_size, -1))
+        if self.pooling == "mean":
+            head_input = chunks.mean(dim=1)
+        else:
+            head_input = chunks.reshape(batch_size, -1)
+
+        return self.head(head_input)
 
     
 

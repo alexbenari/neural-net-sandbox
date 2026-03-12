@@ -188,7 +188,25 @@ def main():
         test_dataset = dataset_cls(os.path.join("data", f"{prefix}-test.csv"))
         train_dataset = wrap_dataset_for_input_type(train_dataset, input_type)
         test_dataset = wrap_dataset_for_input_type(test_dataset, input_type)
-        model = model_map[input_type]()
+        if input_type == "digit1h":
+            model = model_map[input_type](
+                digit_embedding_dim=args.digit_embed_dim,
+                tower_hidden_dim=args.tower_hidden_dim,
+                tower_hidden_layers=args.tower_hidden_layers,
+                chunk_dim=args.chunk_dim,
+                attn_heads=args.attn_heads,
+                ff_hidden_dim=args.ff_hidden_dim,
+                head_hidden_dim=args.head_hidden_dim,
+                head_hidden_layers=args.head_hidden_layers,
+                activation_name=args.activation,
+                pooling=args.pooling,
+                use_digit_position_embedding=not args.no_digit_pos_embedding,
+                use_chunk_position_embedding=not args.no_chunk_pos_embedding,
+                use_attention=not args.no_attention,
+                use_ff=not args.no_ff,
+            )
+        else:
+            model = model_map[input_type]()
 
         train_loss, train_accuracy = train(
             model,
@@ -333,6 +351,86 @@ def cmdline_parser():
         type=float,
         default=0.0001,
         help="Weight decay for optimizers that support it (e.g., adamw).",
+    )
+    parser.add_argument(
+        "--digit-embed-dim",
+        type=int,
+        default=24,
+        help="Digit embedding width for the digit1h tower model.",
+    )
+    parser.add_argument(
+        "--tower-hidden-dim",
+        type=int,
+        default=256,
+        help="Hidden width for chunk tower MLP layers.",
+    )
+    parser.add_argument(
+        "--tower-hidden-layers",
+        type=int,
+        default=2,
+        help="Number of hidden layers in the chunk tower MLP.",
+    )
+    parser.add_argument(
+        "--chunk-dim",
+        type=int,
+        default=64,
+        help="Chunk state width used by attention and the output head.",
+    )
+    parser.add_argument(
+        "--attn-heads",
+        type=int,
+        default=2,
+        help="Attention head count for the digit1h tower model.",
+    )
+    parser.add_argument(
+        "--ff-hidden-dim",
+        type=int,
+        default=128,
+        help="Hidden width for the post-attention feedforward block.",
+    )
+    parser.add_argument(
+        "--head-hidden-dim",
+        type=int,
+        default=128,
+        help="Hidden width for the final prediction head.",
+    )
+    parser.add_argument(
+        "--head-hidden-layers",
+        type=int,
+        default=1,
+        help="Number of hidden layers in the final prediction head.",
+    )
+    parser.add_argument(
+        "--activation",
+        choices=["relu", "gelu", "silu"],
+        default="silu",
+        help="Activation to use inside the digit1h tower model.",
+    )
+    parser.add_argument(
+        "--pooling",
+        choices=["flatten", "mean"],
+        default="flatten",
+        help="How to pool chunk states before the final head.",
+    )
+    parser.add_argument(
+        "--no-digit-pos-embedding",
+        action="store_true",
+        help="Disable learned digit position embeddings in the digit1h tower model.",
+    )
+    parser.add_argument(
+        "--no-chunk-pos-embedding",
+        action="store_true",
+        help="Disable learned chunk position embeddings in the digit1h tower model.",
+    )
+    parser.add_argument(
+        "--no-attention",
+        action="store_true",
+        help="Disable cross-chunk self-attention in the digit1h tower model.",
+    )
+    parser.add_argument(
+        "--no-ff",
+        action="store_true",
+        help="Disable the post-attention feedforward residual block in the digit1h tower model.",
     )
     
     return parser
