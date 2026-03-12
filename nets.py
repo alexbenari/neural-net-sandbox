@@ -84,9 +84,11 @@ class TowersMLPForDigit1H(nn.Module):
         #self.tower = make_mlp([30, 30, 30, 30, 30, 30 , 30 , 20])
         #self.tower = make_mlp([30, 30, 100, 300, 100, 30 , 30 , 30])
         #self.tower = make_mlp([30, 100, 200, 300, 200, 100 , 100 , 30])
-        self.tower = make_mlp([30, 300, 500, 500, 300, 300 , 100 , 30])
+        self.tower = make_mlp(
+            [30, 300, 500, 500, 300, 300, 100, 30], activation=nn.SiLU
+        )
         #self.head = make_mlp([1536, 512, 128, 1])
-        self.head = make_mlp([90, 1024, 512, 256, 128, 1])
+        self.head = make_mlp([90, 1024, 512, 256, 128, 1], activation=nn.SiLU)
         self.dropout = nn.Dropout(p=0.2)
 
     def forward(self, x):
