@@ -325,7 +325,7 @@ def cmdline_parser():
     parser.add_argument(
         "--min-lr-ratio",
         type=float,
-        default=0.1,
+        default=0.02,
         help="Final LR as a fraction of the base LR when using cosine decay.",
     )
     parser.add_argument(
