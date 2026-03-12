@@ -1,5 +1,6 @@
 import argparse
 import collections
+import math
 from html import parser
 import os
 import time
@@ -17,6 +18,19 @@ from nets import (
     TowersMLPForDigit1H,
 )
 
+
+def compute_lr_scale(elapsed, time_budget, warmup_fraction, min_lr_ratio):
+    if time_budget <= 0:
+        return 1.0
+    progress = min(max(elapsed / time_budget, 0.0), 1.0)
+    if warmup_fraction > 0.0 and progress < warmup_fraction:
+        return progress / warmup_fraction
+    if progress >= 1.0:
+        return min_lr_ratio
+    decay_progress = (progress - warmup_fraction) / max(1e-8, 1.0 - warmup_fraction)
+    cosine = 0.5 * (1.0 + math.cos(math.pi * decay_progress))
+    return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
+
 def train(
     model,
     training_set,
@@ -30,6 +44,9 @@ def train(
     log_per_epoch=True,
     input_type="normalized-int",
     global_step=0,
+    lr_schedule="constant",
+    warmup_fraction=0.03,
+    min_lr_ratio=0.1,
 ):
     model = model.to(device)
     total_params = sum(p.numel() for p in model.parameters())
@@ -50,6 +67,8 @@ def train(
         )
     else:
         optimizer = optimizer_map[optimizer_name](model.parameters(), lr=learning_rate)
+    for param_group in optimizer.param_groups:
+        param_group.setdefault("initial_lr", learning_rate)
 
     training_set = prep.maybe_preload_dataset(training_set, device, preload)
     data_loader = DataLoader(training_set, batch_size=batch_size, shuffle=True)
@@ -57,6 +76,7 @@ def train(
     print(f"Dataset size: {dataset_size}, batch size: {batch_size}, epochs: {epochs}")
     
     total_training_time = 0
+    train_start = time.perf_counter()
     for epoch in range(epochs):
         if(total_training_time >= TIME_BUDGET):
             print(f"Time budget of {TIME_BUDGET} seconds reached. Stopping training.")
@@ -69,6 +89,16 @@ def train(
             if not preload:
                 data = data.to(device)
                 labels = labels.to(device)
+            if lr_schedule == "cosine":
+                elapsed = time.perf_counter() - train_start
+                lr_scale = compute_lr_scale(
+                    elapsed,
+                    TIME_BUDGET,
+                    warmup_fraction=warmup_fraction,
+                    min_lr_ratio=min_lr_ratio,
+                )
+                for param_group in optimizer.param_groups:
+                    param_group["lr"] = param_group["initial_lr"] * lr_scale
             outputs = model(data)
             assert outputs.shape == labels.shape
             loss = criterion(outputs, labels)
@@ -172,6 +202,9 @@ def main():
             preload=args.preload,
             log_per_epoch=True,
             input_type=input_type,
+            lr_schedule=args.lr_schedule,
+            warmup_fraction=args.warmup_fraction,
+            min_lr_ratio=args.min_lr_ratio,
         )
         run_eval = True
         run_test = True
@@ -276,6 +309,24 @@ def cmdline_parser():
         type=float,
         default=0.0004,
         help="Learning rate for the optimizer.",
+    )
+    parser.add_argument(
+        "--lr-schedule",
+        choices=["constant", "cosine"],
+        default="cosine",
+        help="Learning-rate schedule to use during training.",
+    )
+    parser.add_argument(
+        "--warmup-fraction",
+        type=float,
+        default=0.03,
+        help="Fraction of the time budget reserved for linear LR warmup.",
+    )
+    parser.add_argument(
+        "--min-lr-ratio",
+        type=float,
+        default=0.1,
+        help="Final LR as a fraction of the base LR when using cosine decay.",
     )
     parser.add_argument(
         "--weight-decay",
