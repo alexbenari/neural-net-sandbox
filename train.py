@@ -367,7 +367,7 @@ def cmdline_parser():
     parser.add_argument(
         "--tower-hidden-layers",
         type=int,
-        default=2,
+        default=3,
         help="Number of hidden layers in the chunk tower MLP.",
     )
     parser.add_argument(

@@ -92,7 +92,7 @@ class TowersMLPForDigit1H(nn.Module):
         self,
         digit_embedding_dim=24,
         tower_hidden_dim=256,
-        tower_hidden_layers=2,
+        tower_hidden_layers=3,
         chunk_dim=64,
         attn_heads=2,
         ff_hidden_dim=128,
