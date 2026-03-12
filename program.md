@@ -110,9 +110,10 @@ LOOP FOREVER:
 5. Read out the results: `findstr /R "^Eval avg_loss:" run.log`
 6. If the findStr output is empty, the run crashed. Run `powershell -Command "Get-Content run.log -Tail 50"` to read the Python stack trace and attempt a fix. If you can't get things to work after more than a few attempts, give up.
 7. Record the results in the tsv (NOTE: do not commit the results.tsv file, leave it untracked by git)
-8. If avg_loss improved (lower), you "advance" the branch, keeping the git commit
-9.  If avg_loss is equal or worse, you git reset back to where you started
-10. Immediately start the next iteration of this loop from step 1. Do not ask for permission. Do not stop to give a final summary unless the human explicitly asks you to pause or summarize.
+8. Update the experiment's section in musings.md with whether the experiment succeeded or not and what you make of that.
+9. If avg_loss improved (lower), you "advance" the branch, keeping the git commit
+10. If avg_loss is equal or worse, you git reset back to where you started
+11. Immediately start the next iteration of this loop from step 1. Do not ask for permission. Do not stop to give a final summary unless the human explicitly asks you to pause or summarize.
 
 The idea is that you are a completely autonomous researcher trying things out. If they work, keep. If they don't, discard. And you're advancing the branch so that you can iterate. If you feel like you're getting stuck in some way, you can rewind but you should probably do this very very sparingly (if ever).
 
