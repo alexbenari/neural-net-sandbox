@@ -240,7 +240,7 @@ def cmdline_parser():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=50,
+        default=500,
         help="Number of training epochs when running training.",
     )
     
@@ -256,7 +256,7 @@ def cmdline_parser():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=32,
+        default=1024,
         help="Batch size for training.",
     )
     parser.add_argument(
@@ -268,19 +268,19 @@ def cmdline_parser():
     parser.add_argument(
         "--optimizer",
         choices=["sgd", "adam", "adamw", "rmsprop", "adagrad"],
-        default="sgd",
+        default="adamw",
         help="Optimizer to use for training.",
     )
     parser.add_argument(
         "--lr",
         type=float,
-        default=0.01,
+        default=0.0004,
         help="Learning rate for the optimizer.",
     )
     parser.add_argument(
         "--weight-decay",
         type=float,
-        default=None,
+        default=0.0001,
         help="Weight decay for optimizers that support it (e.g., adamw).",
     )
     
@@ -289,4 +289,3 @@ def cmdline_parser():
 
 if __name__ == "__main__":
     main()
-

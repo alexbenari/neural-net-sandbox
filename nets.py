@@ -1,5 +1,4 @@
 import torch
-import torch
 import torch.nn as nn
 
 
@@ -80,27 +79,37 @@ class SimpleMLPForDigit1H(nn.Module):
 class TowersMLPForDigit1H(nn.Module):
     def __init__(self):
         super(TowersMLPForDigit1H, self).__init__()
-        #self.tower = make_mlp([30, 768, 1024, 512])
-        #self.tower = make_mlp([30, 30, 30, 30, 30, 30 , 30 , 20])
-        #self.tower = make_mlp([30, 30, 100, 300, 100, 30 , 30 , 30])
-        #self.tower = make_mlp([30, 100, 200, 300, 200, 100 , 100 , 30])
-        self.tower = make_mlp([30, 300, 500, 500, 300, 300 , 100 , 30])
-        #self.head = make_mlp([1536, 512, 128, 1])
-        self.head = make_mlp([90, 1024, 512, 256, 128, 1])
-        self.dropout = nn.Dropout(p=0.2)
+        self.digit_embedding = nn.Linear(10, 24, bias=False)
+        self.digit_position_embedding = nn.Parameter(torch.zeros(9, 24))
+        self.chunk_position_embedding = nn.Parameter(torch.zeros(3, 64))
+        self.tower = make_mlp([72, 256, 256, 64], activation=nn.SiLU)
+        self.attn_norm = nn.LayerNorm(64)
+        self.attn = nn.MultiheadAttention(64, num_heads=2, batch_first=True)
+        self.ff_norm = nn.LayerNorm(64)
+        self.ff = nn.Sequential(
+            nn.Linear(64, 128),
+            nn.SiLU(),
+            nn.Linear(128, 64),
+        )
+        self.head = make_mlp([192, 128, 1], activation=nn.SiLU)
+        nn.init.normal_(self.digit_position_embedding, mean=0.0, std=0.02)
+        nn.init.normal_(self.chunk_position_embedding, mean=0.0, std=0.02)
 
     def forward(self, x):
-        # Split x into 3 vectors of 30.
-        x1 = x[:, 0:30]
-        x2 = x[:, 30:60]
-        x3 = x[:, 60:90]
-        # Pass each vector through the shared tower and concat the result.
-        t1 = self.tower(x1)
-        t2 = self.tower(x2)
-        t3 = self.tower(x3)
-        t = torch.cat((t1, t2, t3), dim=1)
-        #t = self.dropout(t)
-        return self.head(t)
+        batch_size = x.size(0)
+        digits = x.view(batch_size, 9, 10)
+        digits = self.digit_embedding(digits)
+        digits = digits + self.digit_position_embedding.unsqueeze(0)
+        chunks = digits.view(batch_size, 3, 72)
+        chunks = self.tower(chunks)
+        chunks = chunks + self.chunk_position_embedding.unsqueeze(0)
+
+        attn_input = self.attn_norm(chunks)
+        attn_output, _ = self.attn(attn_input, attn_input, attn_input, need_weights=False)
+        chunks = chunks + attn_output
+        chunks = chunks + self.ff(self.ff_norm(chunks))
+
+        return self.head(chunks.reshape(batch_size, -1))
 
     
 
