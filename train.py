@@ -274,7 +274,7 @@ def cmdline_parser():
     parser.add_argument(
         "--lr",
         type=float,
-        default=0.0003,
+        default=0.0004,
         help="Learning rate for the optimizer.",
     )
     parser.add_argument(
