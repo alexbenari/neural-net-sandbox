@@ -268,7 +268,7 @@ def cmdline_parser():
     parser.add_argument(
         "--optimizer",
         choices=["sgd", "adam", "adamw", "rmsprop", "adagrad"],
-        default="adam",
+        default="adamw",
         help="Optimizer to use for training.",
     )
     parser.add_argument(
@@ -280,7 +280,7 @@ def cmdline_parser():
     parser.add_argument(
         "--weight-decay",
         type=float,
-        default=None,
+        default=0.0001,
         help="Weight decay for optimizers that support it (e.g., adamw).",
     )
     
