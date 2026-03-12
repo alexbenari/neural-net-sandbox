@@ -84,14 +84,14 @@ class TowersMLPForDigit1H(nn.Module):
         self.chunk_position_embedding = nn.Parameter(torch.zeros(3, 64))
         self.tower = make_mlp([72, 256, 256, 64], activation=nn.SiLU)
         self.attn_norm = nn.LayerNorm(64)
-        self.attn = nn.MultiheadAttention(64, num_heads=4, batch_first=True)
+        self.attn = nn.MultiheadAttention(64, num_heads=2, batch_first=True)
         self.ff_norm = nn.LayerNorm(64)
         self.ff = nn.Sequential(
             nn.Linear(64, 128),
             nn.SiLU(),
             nn.Linear(128, 64),
         )
-        self.head = make_mlp([192, 160, 64, 1], activation=nn.SiLU)
+        self.head = make_mlp([192, 128, 1], activation=nn.SiLU)
         nn.init.normal_(self.digit_position_embedding, mean=0.0, std=0.02)
         nn.init.normal_(self.chunk_position_embedding, mean=0.0, std=0.02)
 
