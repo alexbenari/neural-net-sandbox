@@ -91,7 +91,7 @@ class TowersMLPForDigit1H(nn.Module):
             nn.SiLU(),
             nn.Linear(128, 64),
         )
-        self.head = make_mlp([192, 256, 128, 1], activation=nn.SiLU)
+        self.head = make_mlp([192, 160, 64, 1], activation=nn.SiLU)
         nn.init.normal_(self.digit_position_embedding, mean=0.0, std=0.02)
         nn.init.normal_(self.chunk_position_embedding, mean=0.0, std=0.02)
 
