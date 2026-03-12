@@ -1,0 +1,34 @@
+commit	avg_loss	status	description
+e43a5b9	2.299100	keep	baseline default digit1h towers+sgd
+e43a5b9	2.836600	discard	adamw lr=0.001 weight_decay=0.01 on baseline digit1h towers
+e43a5b9	7.602700	discard	sgd lr=0.02 on baseline digit1h towers
+e43a5b9	2.273600	keep	adam lr=0.0003 batch_size=1024 epochs=500 uses full 300s budget
+1e7aeb8	2.038200	keep	commit best digit1h baseline defaults adam lr=0.0003 batch_size=1024 epochs=500
+88a5b34	2.250400	discard	add chunk nonzero and small-number features to digit1h tower head
+e62dae3	2.296800	discard	adam lr=0.0005 with current digit1h baseline
+ec2cdb0	2.349500	discard	adam lr=0.0003 with batch_size=2048 on current digit1h baseline
+1def5b2	1.998900	keep	switch digit1h tower and head activations from ReLU to SiLU
+7dec426	1.978800	keep	silu digit1h baseline with adam lr=0.0004
+d662109	1.977800	keep	adopt silu lr=0.0004 baseline defaults and replay default run
+abb1f0f	1.969800	keep	silu baseline with adamw weight_decay=0.0001
+be07c83	1.981100	discard	adamw weight_decay=0.0002 on silu baseline
+92dac2a	2.002400	discard	replay codified adamw silu baseline showed weaker run from same settings
+1fd1d59	1.992700	discard	adamw silu baseline with batch_size=768
+23276d9	1.995000	discard	adamw silu baseline with weight_decay=0.00005
+bfa0175	2.019300	discard	adamw silu baseline with lr=0.00035
+350a228	2.047300	discard	adamw silu baseline with lr=0.00045
+7afdbc5	1.981600	discard	shrink digit1h head width under adamw silu baseline
+9f9a027	2.996300	discard	enable dropout on concatenated digit1h tower features
+5161a47	2.052600	discard	add raw digit1h input skip connection into tower head
+ba4470a	2.540000	discard	set digit1h head final bias init to 93.0
+2a025f5	1.977300	discard	widen digit1h tower output bottleneck to 64
+53bb698	1.981300	discard	add learned chunk score side channel to digit1h head
+674f0af	2.002700	discard	add LayerNorm before digit1h head
+461eb61	1.990500	discard	make digit1h head shallower
+b4295b4	1.977900	discard	make digit1h tower shallower
+5dd8bae	2.006100	discard	cosine lr decay from 0.0004 with min_lr 0.00001
+1dd10f7	2.022000	discard	adamw silu baseline with grad clipping norm 1.0
+4b40b07	2.678400	discard	switch to digit input under current adamw baseline
+941dd7a	1.977700	discard	unshare million thousand and units towers
+13bdd72	1.980400	discard	set digit1h bottleneck width to 48
+ad5cac2	2.065000	discard	adamw silu baseline with batch_size=1536
