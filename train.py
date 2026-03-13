@@ -201,7 +201,7 @@ def main():
                 activation_name=args.activation,
                 pooling=args.pooling,
                 use_digit_position_embedding=not args.no_digit_pos_embedding,
-                use_chunk_position_embedding=not args.no_chunk_pos_embedding,
+                use_chunk_position_embedding=args.chunk_pos_embedding,
                 use_attention=not args.no_attention,
                 use_ff=not args.no_ff,
             )
@@ -418,9 +418,10 @@ def cmdline_parser():
         help="Disable learned digit position embeddings in the digit1h tower model.",
     )
     parser.add_argument(
-        "--no-chunk-pos-embedding",
+        "--chunk-pos-embedding",
         action="store_true",
-        help="Disable learned chunk position embeddings in the digit1h tower model.",
+        default=False,
+        help="Enable learned chunk position embeddings in the digit1h tower model.",
     )
     parser.add_argument(
         "--no-attention",

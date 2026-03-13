@@ -101,7 +101,7 @@ class TowersMLPForDigit1H(nn.Module):
         activation_name="silu",
         pooling="flatten",
         use_digit_position_embedding=True,
-        use_chunk_position_embedding=True,
+        use_chunk_position_embedding=False,
         use_attention=True,
         use_ff=True,
     ):
