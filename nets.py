@@ -103,7 +103,7 @@ class TowersMLPForDigit1H(nn.Module):
         use_digit_position_embedding=True,
         use_chunk_position_embedding=False,
         use_attention=True,
-        use_ff=True,
+        use_ff=False,
     ):
         super(TowersMLPForDigit1H, self).__init__()
         if chunk_dim % attn_heads != 0:

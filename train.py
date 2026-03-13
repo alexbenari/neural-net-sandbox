@@ -203,7 +203,7 @@ def main():
                 use_digit_position_embedding=not args.no_digit_pos_embedding,
                 use_chunk_position_embedding=args.chunk_pos_embedding,
                 use_attention=not args.no_attention,
-                use_ff=not args.no_ff,
+                use_ff=args.ff_block,
             )
         else:
             model = model_map[input_type]()
@@ -429,9 +429,10 @@ def cmdline_parser():
         help="Disable cross-chunk self-attention in the digit1h tower model.",
     )
     parser.add_argument(
-        "--no-ff",
+        "--ff-block",
         action="store_true",
-        help="Disable the post-attention feedforward residual block in the digit1h tower model.",
+        default=False,
+        help="Enable the post-attention feedforward residual block in the digit1h tower model.",
     )
     
     return parser
